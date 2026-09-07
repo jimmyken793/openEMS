@@ -22,6 +22,7 @@
 #include "operator_extension.h"
 
 class FunctionParser;
+class Engine_CUDA;
 
 //! Operator extension implementation an uniaxial perfectly matched layer (upml)
 /*
@@ -32,6 +33,7 @@ class FunctionParser;
 class Operator_Ext_UPML : public Operator_Extension
 {
 	friend class Engine_Ext_UPML;
+	friend class Engine_CUDA;
 public:
 	virtual ~Operator_Ext_UPML();
 

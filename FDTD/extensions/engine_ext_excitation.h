@@ -23,9 +23,11 @@
 #include "FDTD/operator.h"
 
 class Operator_Ext_Excitation;
+class Engine_CUDA;
 
 class Engine_Ext_Excitation : public Engine_Extension
 {
+	friend class Engine_CUDA;
 public:
 	Engine_Ext_Excitation(Operator_Ext_Excitation* op_ext);
 	virtual ~Engine_Ext_Excitation();

@@ -4,12 +4,17 @@
 #include "cuda_common.h"
 #include "engine.h"
 
+#include <vector>
+
 class Operator_CUDA;
+struct CUDA_UPML_Data;
+struct CUDA_Excitation_Data;
 
 class Engine_CUDA : public Engine
 {
 public:
-	static Engine_CUDA* New(const Operator_CUDA* op, unsigned int cudaDeviceNumber);
+	static Engine_CUDA* New(const Operator_CUDA* op, unsigned int cudaDeviceNumber,
+			bool deviceExtensions);
 	virtual ~Engine_CUDA();
 
 	virtual void Init();
@@ -27,19 +32,27 @@ public:
 	virtual void SetCurr(unsigned int n, const unsigned int pos[3], FDTD_FLOAT value) { SetCurr(n, pos[0], pos[1], pos[2], value); }
 
 protected:
-	Engine_CUDA(const Operator_CUDA* op);
+	Engine_CUDA(const Operator_CUDA* op, bool deviceExtensions);
 
 private:
 	size_t Index(unsigned int x, unsigned int y, unsigned int z) const { return CUDAFieldIndex(x, y, z, numLines[1], numLines[2]); }
 	void FreeFields();
 	CUDA_VECTOR* AllocateField(const char* name);
+	void BuildDeviceExtensions();
+	void FreeDeviceExtensions();
+	void PrefetchDeviceData();
+	bool IterateReference(unsigned int iterTS);
+	bool IterateDevice(unsigned int iterTS);
 
 	const Operator_CUDA* m_cudaOperator;
 	unsigned int m_cudaDeviceNumber;
+	bool m_deviceExtensions;
 	dim3 m_gridDim;
 	dim3 m_blockDim;
 	CUDA_VECTOR* m_volt;
 	CUDA_VECTOR* m_curr;
+	std::vector<CUDA_UPML_Data*> m_cudaUPML;
+	std::vector<CUDA_Excitation_Data*> m_cudaExcitations;
 };
 
 #endif // ENGINE_CUDA_H

@@ -147,7 +147,8 @@ void openEMS::showUsage()
 	cout << "\t\t--engine=multithreaded\t\tengine using compressed operator + sse vector extensions + multithreading" << endl;
 #endif
 #ifdef WITH_CUDA
-	cout << "\t\t--engine=cuda\t\t\tCUDA lifecycle reference engine" << endl;
+	cout << "\t\t--engine=cuda\t\t\tCUDA device extension engine" << endl;
+	cout << "\t\t--engine=cuda-reference\tCUDA lifecycle reference engine" << endl;
 	cout << "\t--cuda-device=<n>\tSelect CUDA device (needs: --engine=cuda)" << endl;
 #endif
 	cout << "\t--numThreads=<n>\tForce use n threads for multithreaded engine (needs: --engine=multithreaded)" << endl;
@@ -229,8 +230,14 @@ bool openEMS::parseCommandLineArgument( const char *argv )
 #ifdef WITH_CUDA
 	else if (strcmp(argv,"--engine=cuda")==0)
 	{
-		cout << "openEMS - enabled CUDA lifecycle reference engine" << endl;
+		cout << "openEMS - enabled CUDA device extension engine" << endl;
 		m_engine = EngineType_CUDA;
+		return true;
+	}
+	else if (strcmp(argv,"--engine=cuda-reference")==0)
+	{
+		cout << "openEMS - enabled CUDA lifecycle reference engine" << endl;
+		m_engine = EngineType_CUDA_Reference;
 		return true;
 	}
 	else if (strncmp(argv,"--cuda-device=",14)==0)
@@ -637,14 +644,14 @@ void openEMS::SetupCylinderMultiGrid(std::string val)
 bool openEMS::SetupOperator()
 {
 #ifdef WITH_CUDA
-	if (m_engine == EngineType_CUDA)
+	if (m_engine == EngineType_CUDA || m_engine == EngineType_CUDA_Reference)
 	{
 		if (CylinderCoords)
 		{
 			cerr << "openEMS::SetupOperator: CUDA engine supports Cartesian coordinates only." << endl;
 			return false;
 		}
-		FDTD_Op = Operator_CUDA::New(m_engine_cuda_device);
+		FDTD_Op = Operator_CUDA::New(m_engine_cuda_device, m_engine == EngineType_CUDA);
 	}
 	else
 #endif

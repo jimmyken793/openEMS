@@ -22,11 +22,13 @@
 #include "FDTD/operator.h"
 
 class Excitation;
+class Engine_CUDA;
 
 class Operator_Ext_Excitation : public Operator_Extension
 {
 	friend class Engine_Ext_Excitation;
 	friend class Engine_Ext_Mur_ABC;
+	friend class Engine_CUDA;
 	friend class Operator;
 public:
 	Operator_Ext_Excitation(Operator* op);

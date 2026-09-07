@@ -9,7 +9,7 @@ class Operator_CUDA : public Operator
 	friend class Engine_CUDA;
 
 public:
-	static Operator_CUDA* New(unsigned int cudaDeviceNumber = 0);
+	static Operator_CUDA* New(unsigned int cudaDeviceNumber = 0, bool deviceExtensions = true);
 	virtual ~Operator_CUDA();
 
 	virtual Engine* CreateEngine();
@@ -30,7 +30,7 @@ public:
 	virtual void SetIV(unsigned int n, unsigned int x, unsigned int y, unsigned int z, FDTD_FLOAT value) { CUDAComponent(m_iv[Index(x,y,z)], n) = value; }
 
 protected:
-	Operator_CUDA();
+	Operator_CUDA(bool deviceExtensions);
 	virtual void InitOperator();
 
 private:
@@ -39,6 +39,7 @@ private:
 	CUDA_VECTOR* AllocateCoefficients(const char* name);
 
 	unsigned int m_cudaDeviceNumber;
+	bool m_deviceExtensions;
 	CUDA_VECTOR* m_vv;
 	CUDA_VECTOR* m_vi;
 	CUDA_VECTOR* m_ii;

@@ -4,17 +4,18 @@
 #include <sstream>
 #include <memory>
 
-Operator_CUDA* Operator_CUDA::New(unsigned int cudaDeviceNumber)
+Operator_CUDA* Operator_CUDA::New(unsigned int cudaDeviceNumber, bool deviceExtensions)
 {
-	cout << "Create FDTD operator (CUDA reference)" << endl;
-	std::unique_ptr<Operator_CUDA> op(new Operator_CUDA());
+	cout << (deviceExtensions ? "Create FDTD operator (CUDA device extensions)" :
+			"Create FDTD operator (CUDA reference)") << endl;
+	std::unique_ptr<Operator_CUDA> op(new Operator_CUDA(deviceExtensions));
 	op->m_cudaDeviceNumber = cudaDeviceNumber;
 	op->Init();
 	return op.release();
 }
 
-Operator_CUDA::Operator_CUDA() : Operator(),
-	m_cudaDeviceNumber(0), m_vv(NULL), m_vi(NULL), m_ii(NULL), m_iv(NULL)
+Operator_CUDA::Operator_CUDA(bool deviceExtensions) : Operator(),
+	m_cudaDeviceNumber(0), m_deviceExtensions(deviceExtensions), m_vv(NULL), m_vi(NULL), m_ii(NULL), m_iv(NULL)
 {
 	static_assert(sizeof(CUDA_VECTOR) == sizeof(FDTD_FLOAT) * 4,
 		"CUDA_VECTOR must contain four FDTD_FLOAT values");
@@ -27,7 +28,7 @@ Operator_CUDA::~Operator_CUDA()
 
 Engine* Operator_CUDA::CreateEngine()
 {
-	m_Engine = Engine_CUDA::New(this, m_cudaDeviceNumber);
+	m_Engine = Engine_CUDA::New(this, m_cudaDeviceNumber, m_deviceExtensions);
 	return m_Engine;
 }
 

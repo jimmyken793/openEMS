@@ -159,6 +159,7 @@ protected:
 #endif
 #ifdef WITH_CUDA
 		EngineType_CUDA,
+		EngineType_CUDA_Reference,
 #endif
 	};
 	EngineType m_engine;

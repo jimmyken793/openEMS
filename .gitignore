@@ -31,3 +31,9 @@ python/dist
 !python/doc
 python/doc/_build
 python/doc/Tutorials/__*
+
+# Local validation inputs and handoff notes
+/testdata/
+/CODEX_HANDOFF.md
+/CUDA_REFERENCE.md
+/tmp-local-validation/

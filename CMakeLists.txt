@@ -6,8 +6,15 @@ ELSE()
   SET( CMAKE_BUILD_TYPE Release CACHE STRING "Set to either \"Release\" or \"Debug\"" )
 ENDIF()
 
+cmake_minimum_required(VERSION 3.17)
 PROJECT(openEMS CXX C)
-cmake_minimum_required(VERSION 3.0)
+
+option(WITH_CUDA "Build the experimental CUDA reference engine" OFF)
+if(WITH_CUDA)
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  add_definitions(-DWITH_CUDA)
+endif()
 
 # default
 set(LIB_VERSION_MAJOR 0)
@@ -213,6 +220,11 @@ TARGET_LINK_LIBRARIES( openEMS
   ${vtk_LIBS}
   ${MPI_LIBRARIES}
 )
+
+if(WITH_CUDA)
+  target_link_libraries(openEMS CUDA::cudart)
+  set_target_properties(openEMS PROPERTIES CUDA_STANDARD 11 CUDA_STANDARD_REQUIRED ON)
+endif()
 
 if (WIN32)
     # make sure "BUILD_OPENEMS_LIB" is only set for openEMS (dll) not openEMS_bin (exe)

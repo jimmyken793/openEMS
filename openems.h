@@ -77,6 +77,7 @@ public:
 	void SetMaxTime(double val) {m_maxTime=val;}
 
 	void SetNumberOfThreads(int val);
+	void SetCUDADevice(unsigned int val) {m_engine_cuda_device = val;}
 
 	void DebugMaterial() {DebugMat=true;}
 	void DebugOperator() {DebugOp=true;}
@@ -147,13 +148,22 @@ protected:
 
 	bool m_Abort;
 
+	enum EngineType
+	{
+		EngineType_Basic,
+		EngineType_SSE,
+		EngineType_SSE_Compressed,
+		EngineType_Multithreaded,
 #ifdef MPI_SUPPORT
-	enum EngineType {EngineType_Basic, EngineType_SSE, EngineType_SSE_Compressed, EngineType_Multithreaded, EngineType_MPI};
-#else
-	enum EngineType {EngineType_Basic, EngineType_SSE, EngineType_SSE_Compressed, EngineType_Multithreaded};
+		EngineType_MPI,
 #endif
+#ifdef WITH_CUDA
+		EngineType_CUDA,
+#endif
+	};
 	EngineType m_engine;
 	unsigned int m_engine_numThreads;
+	unsigned int m_engine_cuda_device;
 
 	//! Setup an operator matching the requested engine
 	virtual bool SetupOperator();

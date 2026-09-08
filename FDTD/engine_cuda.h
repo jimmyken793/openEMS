@@ -51,6 +51,8 @@ private:
 	dim3 m_blockDim;
 	CUDA_VECTOR* m_volt;
 	CUDA_VECTOR* m_curr;
+	unsigned char* m_pmlMask;
+	bool m_fuseUPML;
 	std::vector<CUDA_UPML_Data*> m_cudaUPML;
 	std::vector<CUDA_Excitation_Data*> m_cudaExcitations;
 };

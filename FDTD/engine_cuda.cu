@@ -82,10 +82,10 @@ __device__ FDTD_FLOAT& VectorComponent(CUDA_VECTOR& value, unsigned int componen
 __global__ void VoltageKernel(CUDA_VECTOR* volt, const CUDA_VECTOR* curr,
 		const CUDA_VECTOR* opvi, const CUDA_VECTOR* opvv,
 		unsigned int numLinesX, unsigned int numLinesY, unsigned int numLinesZ,
-		size_t cellCount)
+		size_t cellCount, const unsigned char* excluded)
 {
 	const size_t index = static_cast<size_t>(blockDim.x) * blockIdx.x + threadIdx.x;
-	if (index >= cellCount)
+	if (index >= cellCount || (excluded && excluded[index]))
 		return;
 
 	const size_t yz = static_cast<size_t>(numLinesY) * numLinesZ;
@@ -117,10 +117,10 @@ __global__ void VoltageKernel(CUDA_VECTOR* volt, const CUDA_VECTOR* curr,
 __global__ void CurrentKernel(const CUDA_VECTOR* volt, CUDA_VECTOR* curr,
 		const CUDA_VECTOR* opiv, const CUDA_VECTOR* opii,
 		unsigned int numLinesX, unsigned int numLinesY, unsigned int numLinesZ,
-		size_t cellCount)
+		size_t cellCount, const unsigned char* excluded)
 {
 	const size_t index = static_cast<size_t>(blockDim.x) * blockIdx.x + threadIdx.x;
-	if (index >= cellCount)
+	if (index >= cellCount || (excluded && excluded[index]))
 		return;
 
 	const size_t yz = static_cast<size_t>(numLinesY) * numLinesZ;
@@ -147,6 +147,125 @@ __global__ void CurrentKernel(const CUDA_VECTOR* volt, CUDA_VECTOR* curr,
 	value.y = value.y * ii.y + iv.y * (voltage.x - voltageZ.x - voltage.z + voltageX.z);
 	value.z = value.z * ii.z + iv.z * (voltage.y - voltageX.y - voltage.x + voltageY.x);
 	curr[index] = value;
+}
+
+
+__global__ void FusedUPMLVoltageKernel(CUDA_VECTOR* field, CUDA_VECTOR* flux,
+		const CUDA_VECTOR* sameField, const CUDA_VECTOR* oldFlux,
+		const CUDA_VECTOR* newFlux, const CUDA_VECTOR* curr,
+		const CUDA_VECTOR* opvi, const CUDA_VECTOR* opvv,
+		unsigned int startX, unsigned int startY, unsigned int startZ,
+		unsigned int sizeX, unsigned int sizeY, unsigned int sizeZ,
+		unsigned int globalY, unsigned int globalZ, size_t cellCount)
+{
+	const size_t localIndex = static_cast<size_t>(blockDim.x) * blockIdx.x + threadIdx.x;
+	if (localIndex >= cellCount)
+		return;
+
+	const size_t yz = static_cast<size_t>(sizeY) * sizeZ;
+	const unsigned int localX = static_cast<unsigned int>(localIndex / yz);
+	const size_t remainder = localIndex - static_cast<size_t>(localX) * yz;
+	const unsigned int localY = static_cast<unsigned int>(remainder / sizeZ);
+	const unsigned int localZ = static_cast<unsigned int>(remainder - static_cast<size_t>(localY) * sizeZ);
+	const unsigned int x = localX + startX;
+	const unsigned int y = localY + startY;
+	const unsigned int z = localZ + startZ;
+	const size_t index = FieldIndex(x, y, z, globalY, globalZ);
+
+	const CUDA_VECTOR oldValue = field[index];
+	const CUDA_VECTOR previousFlux = flux[localIndex];
+	const CUDA_VECTOR same = sameField[localIndex];
+	const CUDA_VECTOR old = oldFlux[localIndex];
+	CUDA_VECTOR intermediateFlux;
+	intermediateFlux.x = same.x * oldValue.x - old.x * previousFlux.x;
+	intermediateFlux.y = same.y * oldValue.y - old.y * previousFlux.y;
+	intermediateFlux.z = same.z * oldValue.z - old.z * previousFlux.z;
+	intermediateFlux.w = 0;
+
+	const size_t indexX = FieldIndex(x - (x != 0), y, z, globalY, globalZ);
+	const size_t indexY = FieldIndex(x, y - (y != 0), z, globalY, globalZ);
+	const size_t indexZ = FieldIndex(x, y, z - (z != 0), globalY, globalZ);
+	const CUDA_VECTOR current = curr[index];
+	const CUDA_VECTOR currentX = curr[indexX];
+	const CUDA_VECTOR currentY = curr[indexY];
+	const CUDA_VECTOR currentZ = curr[indexZ];
+	const CUDA_VECTOR vi = opvi[index];
+	const CUDA_VECTOR vv = opvv[index];
+	CUDA_VECTOR baseValue = previousFlux;
+	baseValue.x = baseValue.x * vv.x + vi.x * (current.z - currentY.z - current.y + currentZ.y);
+	baseValue.y = baseValue.y * vv.y + vi.y * (current.x - currentZ.x - current.z + currentX.z);
+	baseValue.z = baseValue.z * vv.z + vi.z * (current.y - currentX.y - current.x + currentY.x);
+
+	const CUDA_VECTOR coefficient = newFlux[localIndex];
+	CUDA_VECTOR nextValue;
+	nextValue.x = intermediateFlux.x + coefficient.x * baseValue.x;
+	nextValue.y = intermediateFlux.y + coefficient.y * baseValue.y;
+	nextValue.z = intermediateFlux.z + coefficient.z * baseValue.z;
+	nextValue.w = 0;
+	flux[localIndex] = baseValue;
+	field[index] = nextValue;
+}
+
+__global__ void FusedUPMLCurrentKernel(CUDA_VECTOR* field, CUDA_VECTOR* flux,
+		const CUDA_VECTOR* sameField, const CUDA_VECTOR* oldFlux,
+		const CUDA_VECTOR* newFlux, const CUDA_VECTOR* volt,
+		const CUDA_VECTOR* opiv, const CUDA_VECTOR* opii,
+		unsigned int startX, unsigned int startY, unsigned int startZ,
+		unsigned int sizeX, unsigned int sizeY, unsigned int sizeZ,
+		unsigned int globalX, unsigned int globalY, unsigned int globalZ,
+		size_t cellCount)
+{
+	const size_t localIndex = static_cast<size_t>(blockDim.x) * blockIdx.x + threadIdx.x;
+	if (localIndex >= cellCount)
+		return;
+
+	const size_t yz = static_cast<size_t>(sizeY) * sizeZ;
+	const unsigned int localX = static_cast<unsigned int>(localIndex / yz);
+	const size_t remainder = localIndex - static_cast<size_t>(localX) * yz;
+	const unsigned int localY = static_cast<unsigned int>(remainder / sizeZ);
+	const unsigned int localZ = static_cast<unsigned int>(remainder - static_cast<size_t>(localY) * sizeZ);
+	const unsigned int x = localX + startX;
+	const unsigned int y = localY + startY;
+	const unsigned int z = localZ + startZ;
+	const size_t index = FieldIndex(x, y, z, globalY, globalZ);
+
+	const CUDA_VECTOR oldValue = field[index];
+	const CUDA_VECTOR previousFlux = flux[localIndex];
+	const CUDA_VECTOR same = sameField[localIndex];
+	const CUDA_VECTOR old = oldFlux[localIndex];
+	CUDA_VECTOR intermediateFlux;
+	intermediateFlux.x = same.x * oldValue.x - old.x * previousFlux.x;
+	intermediateFlux.y = same.y * oldValue.y - old.y * previousFlux.y;
+	intermediateFlux.z = same.z * oldValue.z - old.z * previousFlux.z;
+	intermediateFlux.w = 0;
+
+	CUDA_VECTOR baseValue = previousFlux;
+	// The base current kernel skips global high planes, but UPML pre/post still
+	// transforms their field and flux state.
+	if (x < globalX - 1 && y < globalY - 1 && z < globalZ - 1)
+	{
+		const size_t indexX = FieldIndex(x + 1, y, z, globalY, globalZ);
+		const size_t indexY = FieldIndex(x, y + 1, z, globalY, globalZ);
+		const size_t indexZ = FieldIndex(x, y, z + 1, globalY, globalZ);
+		const CUDA_VECTOR voltage = volt[index];
+		const CUDA_VECTOR voltageX = volt[indexX];
+		const CUDA_VECTOR voltageY = volt[indexY];
+		const CUDA_VECTOR voltageZ = volt[indexZ];
+		const CUDA_VECTOR iv = opiv[index];
+		const CUDA_VECTOR ii = opii[index];
+		baseValue.x = baseValue.x * ii.x + iv.x * (voltage.z - voltageY.z - voltage.y + voltageZ.y);
+		baseValue.y = baseValue.y * ii.y + iv.y * (voltage.x - voltageZ.x - voltage.z + voltageX.z);
+		baseValue.z = baseValue.z * ii.z + iv.z * (voltage.y - voltageX.y - voltage.x + voltageY.x);
+	}
+
+	const CUDA_VECTOR coefficient = newFlux[localIndex];
+	CUDA_VECTOR nextValue;
+	nextValue.x = intermediateFlux.x + coefficient.x * baseValue.x;
+	nextValue.y = intermediateFlux.y + coefficient.y * baseValue.y;
+	nextValue.z = intermediateFlux.z + coefficient.z * baseValue.z;
+	nextValue.w = 0;
+	flux[localIndex] = baseValue;
+	field[index] = nextValue;
 }
 
 __global__ void UPMLPreKernel(CUDA_VECTOR* field, CUDA_VECTOR* flux,
@@ -322,6 +441,31 @@ void LaunchUPMLPost(CUDA_UPML_Data* data, CUDA_VECTOR* field, bool voltage,
 			"CUDA UPML post-current kernel launch failed");
 }
 
+
+void LaunchUPMLFused(CUDA_UPML_Data* data, CUDA_VECTOR* field,
+		const CUDA_VECTOR* oppositeField, bool voltage,
+		const CUDA_VECTOR* opCross, const CUDA_VECTOR* opSame,
+		unsigned int globalX, unsigned int globalY, unsigned int globalZ)
+{
+	const unsigned int blocks = static_cast<unsigned int>(
+			(data->cellCount + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
+	if (voltage)
+		FusedUPMLVoltageKernel<<<blocks, THREADS_PER_BLOCK>>>(field, data->voltFlux,
+				data->vv, data->vvfo, data->vvfn, oppositeField, opCross, opSame,
+				data->start[0], data->start[1], data->start[2],
+				data->size[0], data->size[1], data->size[2],
+				globalY, globalZ, data->cellCount);
+	else
+		FusedUPMLCurrentKernel<<<blocks, THREADS_PER_BLOCK>>>(field, data->currFlux,
+				data->ii, data->iifo, data->iifn, oppositeField, opCross, opSame,
+				data->start[0], data->start[1], data->start[2],
+				data->size[0], data->size[1], data->size[2],
+				globalX, globalY, globalZ, data->cellCount);
+	CheckCUDA(cudaGetLastError(), voltage ?
+			"CUDA fused UPML voltage kernel launch failed" :
+			"CUDA fused UPML current kernel launch failed");
+}
+
 void LaunchExcitation(CUDA_Excitation_Data* data, CUDA_VECTOR* field,
 		bool voltage, int numTS)
 {
@@ -353,7 +497,8 @@ Engine_CUDA* Engine_CUDA::New(const Operator_CUDA* op, unsigned int cudaDeviceNu
 
 Engine_CUDA::Engine_CUDA(const Operator_CUDA* op, bool deviceExtensions) : Engine(op),
 	m_cudaOperator(op), m_cudaDeviceNumber(0), m_deviceExtensions(deviceExtensions),
-	m_gridDim(0), m_blockDim(0), m_volt(NULL), m_curr(NULL)
+	m_gridDim(0), m_blockDim(0), m_volt(NULL), m_curr(NULL), m_pmlMask(NULL),
+	m_fuseUPML(false)
 {
 	m_type = CUDA;
 }
@@ -392,6 +537,9 @@ void Engine_CUDA::FreeFields()
 
 void Engine_CUDA::FreeDeviceExtensions()
 {
+	if (m_pmlMask) cudaFree(m_pmlMask);
+	m_pmlMask = NULL;
+	m_fuseUPML = false;
 	for (size_t n = 0; n < m_cudaUPML.size(); ++n)
 		FreeUPML(m_cudaUPML[n]);
 	m_cudaUPML.clear();
@@ -429,6 +577,10 @@ void Engine_CUDA::BuildDeviceExtensions()
 				data->size[0] = op->m_numLines[0];
 				data->size[1] = op->m_numLines[1];
 				data->size[2] = op->m_numLines[2];
+				for (unsigned int axis = 0; axis < 3; ++axis)
+					if (data->start[axis] >= numLines[axis] || data->size[axis] == 0 ||
+							data->size[axis] > numLines[axis] - data->start[axis])
+						throw std::runtime_error("CUDA UPML range is outside the field domain");
 				data->cellCount = static_cast<size_t>(data->size[0]) *
 						data->size[1] * data->size[2];
 
@@ -540,6 +692,41 @@ void Engine_CUDA::BuildDeviceExtensions()
 				data.release();
 			}
 		}
+
+		// Only disjoint ranges have single-writer field ownership. Overlapping
+		// extensions retain the original ordered pre/base/post implementation.
+		if (!m_cudaUPML.empty())
+		{
+			const size_t fieldCellCount = CUDAFieldCellCount(numLines);
+			std::vector<unsigned char> mask(fieldCellCount, 0);
+			bool disjoint = true;
+			for (size_t n = 0; n < m_cudaUPML.size() && disjoint; ++n)
+			{
+				const CUDA_UPML_Data* data = m_cudaUPML[n];
+				for (unsigned int x = 0; x < data->size[0] && disjoint; ++x)
+					for (unsigned int y = 0; y < data->size[1] && disjoint; ++y)
+						for (unsigned int z = 0; z < data->size[2]; ++z)
+						{
+							const size_t index = FieldIndex(x + data->start[0],
+									y + data->start[1], z + data->start[2],
+									numLines[1], numLines[2]);
+							if (mask[index])
+							{
+								disjoint = false;
+								break;
+							}
+							mask[index] = 1;
+						}
+			}
+			if (disjoint)
+			{
+				m_pmlMask = AllocateAndCopy(mask, "CUDA UPML ownership mask copy failed");
+				m_fuseUPML = true;
+				cout << "  CUDA fused UPML updates enabled for disjoint ranges" << endl;
+			}
+			else
+				cout << "  CUDA fused UPML updates disabled for overlapping ranges" << endl;
+		}
 		CheckCUDA(cudaDeviceSynchronize(), "CUDA device extension initialization failed");
 	}
 	catch (...)
@@ -625,7 +812,7 @@ bool Engine_CUDA::IterateReference(unsigned int iterTS)
 		DoPreVoltageUpdates();
 		VoltageKernel<<<m_gridDim, m_blockDim>>>(m_volt, m_curr,
 			m_cudaOperator->m_vi, m_cudaOperator->m_vv,
-			numLines[0], numLines[1], numLines[2], CUDAFieldCellCount(numLines));
+			numLines[0], numLines[1], numLines[2], CUDAFieldCellCount(numLines), NULL);
 		CheckCUDA(cudaGetLastError(), "CUDA voltage kernel launch failed");
 		CheckCUDA(cudaDeviceSynchronize(), "CUDA voltage kernel execution failed");
 		DoPostVoltageUpdates();
@@ -634,7 +821,7 @@ bool Engine_CUDA::IterateReference(unsigned int iterTS)
 		DoPreCurrentUpdates();
 		CurrentKernel<<<m_gridDim, m_blockDim>>>(m_volt, m_curr,
 			m_cudaOperator->m_iv, m_cudaOperator->m_ii,
-			numLines[0], numLines[1], numLines[2], CUDAFieldCellCount(numLines));
+			numLines[0], numLines[1], numLines[2], CUDAFieldCellCount(numLines), NULL);
 		CheckCUDA(cudaGetLastError(), "CUDA current kernel launch failed");
 		CheckCUDA(cudaDeviceSynchronize(), "CUDA current kernel execution failed");
 		DoPostCurrentUpdates();
@@ -651,31 +838,55 @@ bool Engine_CUDA::IterateDevice(unsigned int iterTS)
 	const size_t cellCount = CUDAFieldCellCount(numLines);
 	for (unsigned int iter = 0; iter < iterTS; ++iter)
 	{
-		for (std::vector<CUDA_UPML_Data*>::reverse_iterator it = m_cudaUPML.rbegin();
-				it != m_cudaUPML.rend(); ++it)
-			LaunchUPMLPre(*it, m_volt, true, numLines[1], numLines[2]);
-
-		VoltageKernel<<<m_gridDim, m_blockDim>>>(m_volt, m_curr,
-			m_cudaOperator->m_vi, m_cudaOperator->m_vv,
-			numLines[0], numLines[1], numLines[2], cellCount);
-		CheckCUDA(cudaGetLastError(), "CUDA voltage kernel launch failed");
-
-		for (size_t n = 0; n < m_cudaUPML.size(); ++n)
-			LaunchUPMLPost(m_cudaUPML[n], m_volt, true, numLines[1], numLines[2]);
+		if (m_fuseUPML)
+		{
+			for (size_t n = 0; n < m_cudaUPML.size(); ++n)
+				LaunchUPMLFused(m_cudaUPML[n], m_volt, m_curr, true,
+						m_cudaOperator->m_vi, m_cudaOperator->m_vv,
+						numLines[0], numLines[1], numLines[2]);
+			VoltageKernel<<<m_gridDim, m_blockDim>>>(m_volt, m_curr,
+				m_cudaOperator->m_vi, m_cudaOperator->m_vv,
+				numLines[0], numLines[1], numLines[2], cellCount, m_pmlMask);
+			CheckCUDA(cudaGetLastError(), "CUDA interior voltage kernel launch failed");
+		}
+		else
+		{
+			for (std::vector<CUDA_UPML_Data*>::reverse_iterator it = m_cudaUPML.rbegin();
+					it != m_cudaUPML.rend(); ++it)
+				LaunchUPMLPre(*it, m_volt, true, numLines[1], numLines[2]);
+			VoltageKernel<<<m_gridDim, m_blockDim>>>(m_volt, m_curr,
+				m_cudaOperator->m_vi, m_cudaOperator->m_vv,
+				numLines[0], numLines[1], numLines[2], cellCount, NULL);
+			CheckCUDA(cudaGetLastError(), "CUDA voltage kernel launch failed");
+			for (size_t n = 0; n < m_cudaUPML.size(); ++n)
+				LaunchUPMLPost(m_cudaUPML[n], m_volt, true, numLines[1], numLines[2]);
+		}
 		for (size_t n = 0; n < m_cudaExcitations.size(); ++n)
 			LaunchExcitation(m_cudaExcitations[n], m_volt, true, static_cast<int>(numTS));
 
-		for (std::vector<CUDA_UPML_Data*>::reverse_iterator it = m_cudaUPML.rbegin();
-				it != m_cudaUPML.rend(); ++it)
-			LaunchUPMLPre(*it, m_curr, false, numLines[1], numLines[2]);
-
-		CurrentKernel<<<m_gridDim, m_blockDim>>>(m_volt, m_curr,
-			m_cudaOperator->m_iv, m_cudaOperator->m_ii,
-			numLines[0], numLines[1], numLines[2], cellCount);
-		CheckCUDA(cudaGetLastError(), "CUDA current kernel launch failed");
-
-		for (size_t n = 0; n < m_cudaUPML.size(); ++n)
-			LaunchUPMLPost(m_cudaUPML[n], m_curr, false, numLines[1], numLines[2]);
+		if (m_fuseUPML)
+		{
+			for (size_t n = 0; n < m_cudaUPML.size(); ++n)
+				LaunchUPMLFused(m_cudaUPML[n], m_curr, m_volt, false,
+						m_cudaOperator->m_iv, m_cudaOperator->m_ii,
+						numLines[0], numLines[1], numLines[2]);
+			CurrentKernel<<<m_gridDim, m_blockDim>>>(m_volt, m_curr,
+				m_cudaOperator->m_iv, m_cudaOperator->m_ii,
+				numLines[0], numLines[1], numLines[2], cellCount, m_pmlMask);
+			CheckCUDA(cudaGetLastError(), "CUDA interior current kernel launch failed");
+		}
+		else
+		{
+			for (std::vector<CUDA_UPML_Data*>::reverse_iterator it = m_cudaUPML.rbegin();
+					it != m_cudaUPML.rend(); ++it)
+				LaunchUPMLPre(*it, m_curr, false, numLines[1], numLines[2]);
+			CurrentKernel<<<m_gridDim, m_blockDim>>>(m_volt, m_curr,
+				m_cudaOperator->m_iv, m_cudaOperator->m_ii,
+				numLines[0], numLines[1], numLines[2], cellCount, NULL);
+			CheckCUDA(cudaGetLastError(), "CUDA current kernel launch failed");
+			for (size_t n = 0; n < m_cudaUPML.size(); ++n)
+				LaunchUPMLPost(m_cudaUPML[n], m_curr, false, numLines[1], numLines[2]);
+		}
 		for (size_t n = 0; n < m_cudaExcitations.size(); ++n)
 			LaunchExcitation(m_cudaExcitations[n], m_curr, false, static_cast<int>(numTS));
 

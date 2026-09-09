@@ -8,6 +8,7 @@
 #include "extensions/operator_ext_excitation.h"
 #include "extensions/operator_ext_upml.h"
 
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -62,7 +63,29 @@ struct CUDA_Excitation_Data
 
 namespace
 {
-const unsigned int THREADS_PER_BLOCK = 256;
+const unsigned int DEFAULT_THREADS_PER_BLOCK = 256;
+
+unsigned int ThreadsPerBlock()
+{
+	static const unsigned int threads = []() {
+		const char* value = std::getenv("OPENEMS_CUDA_THREADS_PER_BLOCK");
+		if (!value || !*value)
+			return DEFAULT_THREADS_PER_BLOCK;
+
+		char* end = NULL;
+		const unsigned long parsed = std::strtoul(value, &end, 10);
+		const bool valid = end && *end == '\0' && parsed >= 32 && parsed <= 1024
+				&& (parsed & (parsed - 1)) == 0;
+		if (!valid)
+		{
+			std::cerr << "openEMS CUDA: ignoring invalid OPENEMS_CUDA_THREADS_PER_BLOCK="
+					<< value << "; using " << DEFAULT_THREADS_PER_BLOCK << std::endl;
+			return DEFAULT_THREADS_PER_BLOCK;
+		}
+		return static_cast<unsigned int>(parsed);
+	}();
+	return threads;
+}
 
 __host__ __device__ size_t FieldIndex(unsigned int x, unsigned int y, unsigned int z,
 		unsigned int numLinesY, unsigned int numLinesZ)
@@ -411,9 +434,10 @@ void FreeExcitation(CUDA_Excitation_Data* data)
 void LaunchUPMLPre(CUDA_UPML_Data* data, CUDA_VECTOR* field, bool voltage,
 		unsigned int globalY, unsigned int globalZ)
 {
+	const unsigned int threads = ThreadsPerBlock();
 	const unsigned int blocks = static_cast<unsigned int>(
-			(data->cellCount + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
-	UPMLPreKernel<<<blocks, THREADS_PER_BLOCK>>>(field,
+			(data->cellCount + threads - 1) / threads);
+	UPMLPreKernel<<<blocks, threads>>>(field,
 			voltage ? data->voltFlux : data->currFlux,
 			voltage ? data->vv : data->ii,
 			voltage ? data->vvfo : data->iifo,
@@ -428,9 +452,10 @@ void LaunchUPMLPre(CUDA_UPML_Data* data, CUDA_VECTOR* field, bool voltage,
 void LaunchUPMLPost(CUDA_UPML_Data* data, CUDA_VECTOR* field, bool voltage,
 		unsigned int globalY, unsigned int globalZ)
 {
+	const unsigned int threads = ThreadsPerBlock();
 	const unsigned int blocks = static_cast<unsigned int>(
-			(data->cellCount + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
-	UPMLPostKernel<<<blocks, THREADS_PER_BLOCK>>>(field,
+			(data->cellCount + threads - 1) / threads);
+	UPMLPostKernel<<<blocks, threads>>>(field,
 			voltage ? data->voltFlux : data->currFlux,
 			voltage ? data->vvfn : data->iifn,
 			data->start[0], data->start[1], data->start[2],
@@ -447,16 +472,17 @@ void LaunchUPMLFused(CUDA_UPML_Data* data, CUDA_VECTOR* field,
 		const CUDA_VECTOR* opCross, const CUDA_VECTOR* opSame,
 		unsigned int globalX, unsigned int globalY, unsigned int globalZ)
 {
+	const unsigned int threads = ThreadsPerBlock();
 	const unsigned int blocks = static_cast<unsigned int>(
-			(data->cellCount + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
+			(data->cellCount + threads - 1) / threads);
 	if (voltage)
-		FusedUPMLVoltageKernel<<<blocks, THREADS_PER_BLOCK>>>(field, data->voltFlux,
+		FusedUPMLVoltageKernel<<<blocks, threads>>>(field, data->voltFlux,
 				data->vv, data->vvfo, data->vvfn, oppositeField, opCross, opSame,
 				data->start[0], data->start[1], data->start[2],
 				data->size[0], data->size[1], data->size[2],
 				globalY, globalZ, data->cellCount);
 	else
-		FusedUPMLCurrentKernel<<<blocks, THREADS_PER_BLOCK>>>(field, data->currFlux,
+		FusedUPMLCurrentKernel<<<blocks, threads>>>(field, data->currFlux,
 				data->ii, data->iifo, data->iifn, oppositeField, opCross, opSame,
 				data->start[0], data->start[1], data->start[2],
 				data->size[0], data->size[1], data->size[2],
@@ -472,9 +498,10 @@ void LaunchExcitation(CUDA_Excitation_Data* data, CUDA_VECTOR* field,
 	const CUDA_Excitation_Set& set = voltage ? data->voltage : data->current;
 	if (set.groupCount == 0)
 		return;
+	const unsigned int threads = ThreadsPerBlock();
 	const unsigned int blocks =
-			(set.groupCount + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-	ExcitationKernel<<<blocks, THREADS_PER_BLOCK>>>(field, set.groups, set.entries,
+			(set.groupCount + threads - 1) / threads;
+	ExcitationKernel<<<blocks, threads>>>(field, set.groups, set.entries,
 			set.groupCount, voltage ? data->voltageSignal : data->currentSignal,
 			data->signalLength, data->fixedPeriod, numTS);
 	CheckCUDA(cudaGetLastError(), voltage ?
@@ -752,9 +779,10 @@ void Engine_CUDA::Init()
 	cout << "  Running on device " << m_cudaDeviceNumber << ": " << properties.name << endl;
 
 	const size_t cellCount = CUDAFieldCellCount(numLines);
-	m_blockDim = dim3(THREADS_PER_BLOCK, 1, 1);
+	const unsigned int threads = ThreadsPerBlock();
+	m_blockDim = dim3(threads, 1, 1);
 	m_gridDim = dim3(static_cast<unsigned int>(
-			(cellCount + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK), 1, 1);
+			(cellCount + threads - 1) / threads), 1, 1);
 	cout << "  CUDA linear block size: " << m_blockDim.x << endl;
 	cout << "  CUDA linear grid size: " << m_gridDim.x << endl;
 
